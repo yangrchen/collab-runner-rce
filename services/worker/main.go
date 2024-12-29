@@ -8,6 +8,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
+	"path"
+	"regexp"
+	"syscall"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -32,51 +36,43 @@ type DeleteRequest struct {
 	ID string `json:"id"`
 }
 
+type RunningFirecracker struct {
+	ctx       context.Context
+	cancelCtx context.CancelFunc
+	id        string
+	machine   *firecracker.Machine
+	ip        net.IP
+}
+
+type options struct {
+	Id string `long:"id" description:"Jailer VMM id"`
+	// maybe make this an int instead
+	IpId            byte   `byte:"id" description:"an ip we use to generate an ip address"`
+	FcBinary        string `long:"firecracker-binary" description:"Path to firecracker binary"`
+	FcKernelImage   string `long:"kernel" description:"Path to the kernel image"`
+	FcKernelCmdLine string `long:"kernel-opts" description:"Kernel commandline"`
+	FcRootDrivePath string `long:"root-drive" description:"Path to root disk image"`
+	FcSocketPath    string `long:"socket-path" short:"s" description:"path to use for firecracker socket"`
+	FcCPUCount      int64  `long:"ncpus" short:"c" description:"Number of CPUs"`
+	FcMemSz         int64  `long:"memory" short:"m" description:"VM memory, in MiB"`
+}
+
 func main() {
-	// const numJobs = 10
-	// ctx, cancel := context.WithCancel(context.Background())
-	// defer cancel()
-	// buffChan := make(chan int, 3)
-	// results := make(chan int, numJobs)
-	// go func(ctx context.Context, buffChan chan<- int) {
-	// 	counter := 0
-	// 	for {
-	// 		select {
-	// 		case <-ctx.Done():
-	// 			return
-	// 		default:
-	// 			buffChan <- 1
-	// 			counter += 1
-	// 			log.Infof("Added another to buff channel: %d", counter)
-	// 		}
-	// 	}
-	// }(ctx, buffChan)
+	defer deleteVMMSockets()
 
-	// for i := 0; i < numJobs; i++ {
-	// 	go func() {
-	// 		b := <-buffChan
-	// 		results <- b
-	// 	}()
-	// }
-
-	// for i := 0; i < numJobs; i++ {
-	// 	res := <-results
-	// 	fmt.Println(res)
-	// }
-	const numJobs = 10
+	const numJobs = 1
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	vmpool := make(chan RunningFirecracker, 5)
+	vmpool := make(chan RunningFirecracker, 1)
 	results := make(chan types.AgentRunResponse, numJobs)
 
 	go fillVMPool(ctx, vmpool)
+	installSignalHandlers()
 
 	for i := 0; i < numJobs; i++ {
 		go runJob(ctx, vmpool, results)
 	}
-
-	time.Sleep(time.Second * 10)
 
 	for i := 0; i < numJobs; i++ {
 		res := <-results
@@ -183,14 +179,6 @@ func getOptions(vmmID string) options {
 	}
 }
 
-type RunningFirecracker struct {
-	ctx       context.Context
-	cancelCtx context.CancelFunc
-	id        string
-	machine   *firecracker.Machine
-	ip        net.IP
-}
-
 func createVMM(ctx context.Context) (*RunningFirecracker, error) {
 	vmmID := xid.New().String()
 	opts := getOptions(vmmID)
@@ -205,7 +193,10 @@ func createVMM(ctx context.Context) (*RunningFirecracker, error) {
 		WithStderr(os.Stderr).
 		Build(ctx)
 
+	logger := log.New()
+
 	machineOpts := []firecracker.Opt{
+		firecracker.WithLogger(log.NewEntry(logger)),
 		firecracker.WithProcessRunner(cmd),
 	}
 	machine, err := firecracker.NewMachine(vmmCtx, fcCfg, machineOpts...)
@@ -225,19 +216,6 @@ func createVMM(ctx context.Context) (*RunningFirecracker, error) {
 		machine:   machine,
 		ip:        machine.Cfg.NetworkInterfaces[0].StaticConfiguration.IPConfiguration.IPAddr.IP,
 	}, nil
-}
-
-type options struct {
-	Id string `long:"id" description:"Jailer VMM id"`
-	// maybe make this an int instead
-	IpId            byte   `byte:"id" description:"an ip we use to generate an ip address"`
-	FcBinary        string `long:"firecracker-binary" description:"Path to firecracker binary"`
-	FcKernelImage   string `long:"kernel" description:"Path to the kernel image"`
-	FcKernelCmdLine string `long:"kernel-opts" description:"Kernel commandline"`
-	FcRootDrivePath string `long:"root-drive" description:"Path to root disk image"`
-	FcSocketPath    string `long:"socket-path" short:"s" description:"path to use for firecracker socket"`
-	FcCPUCount      int64  `long:"ncpus" short:"c" description:"Number of CPUs"`
-	FcMemSz         int64  `long:"memory" short:"m" description:"VM memory, in MiB"`
 }
 
 func (opts *options) getConfig() firecracker.Config {
@@ -275,23 +253,42 @@ func (opts *options) getConfig() firecracker.Config {
 	}
 }
 
-// func installSignalHandlers(ctx context.Context, m *firecracker.Machine) {
-// 	// not sure if this is actually really helping with anything
-// 	go func() {
-// 		// Clear some default handlers installed by the firecracker SDK:
-// 		signal.Reset(os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
-// 		c := make(chan os.Signal, 1)
-// 		signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
+func deleteVMMSockets() {
+	dir, err := os.ReadDir(os.TempDir())
+	if err != nil {
+		log.WithError(err).Error("Failed to read temporary directory")
+	}
 
-// 		for {
-// 			switch s := <-c; {
-// 			case s == syscall.SIGTERM || s == os.Interrupt:
-// 				log.Printf("Caught SIGINT, requesting clean shutdown")
-// 				m.Shutdown(ctx)
-// 			case s == syscall.SIGQUIT:
-// 				log.Printf("Caught SIGTERM, forcing shutdown")
-// 				m.StopVMM()
-// 			}
-// 		}
-// 	}()
-// }
+	pattern := "firecracker-.*.sock"
+	re := regexp.MustCompile(pattern)
+
+	for _, d := range dir {
+		matches := re.MatchString(d.Name())
+		if matches {
+			log.WithField("socket", d.Name()).Debug("Removing socket")
+			os.Remove(path.Join(os.TempDir(), d.Name()))
+		}
+	}
+}
+
+func installSignalHandlers() {
+	go func() {
+		// Clear some default handlers installed by the firecracker SDK:
+		signal.Reset(os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
+
+		for {
+			switch s := <-c; {
+			case s == syscall.SIGTERM || s == os.Interrupt:
+				log.Printf("Caught SIGINT, requesting clean shutdown")
+				deleteVMMSockets()
+				os.Exit(0)
+			case s == syscall.SIGQUIT:
+				log.Printf("Caught SIGTERM, forcing shutdown")
+				deleteVMMSockets()
+				os.Exit(0)
+			}
+		}
+	}()
+}

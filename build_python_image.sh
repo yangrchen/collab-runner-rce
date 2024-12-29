@@ -14,8 +14,9 @@ remove_temp_mnt() {
 IMG_ID=$(docker build -q .)
 AGENT_PATH="$(pwd)/services/agent/agent"
 AGENT_INIT_FILE="$(pwd)/services/agent/agent.service"
-CONTAINER_ID=$(docker run -td -v "$AGENT_PATH":/usr/local/bin/agent \
-                -v "$AGENT_INIT_FILE":/etc/systemd/system/agent.service $IMG_ID /bin/bash)
+CONTAINER_ID=$(docker run -td \
+                -v "$AGENT_PATH":/usr/local/bin/agent \
+                -v "$AGENT_INIT_FILE":/etc/systemd/system/agent.service $IMG_ID /bin/bash )
 
 FS=${1:-python_fs_image}.ext4
 
@@ -29,20 +30,11 @@ if ! mount $FS $MOUNTDIR; then
     exit 1
 fi
 
+# Enable agent service and link systemd in container
+docker exec -t "$CONTAINER_ID" sh -c "/bin/systemctl enable agent.service && ln -sf /lib/systemd/systemd /sbin/init"
+
+# Copy over contents to filesystem mount
 docker cp $CONTAINER_ID:/ "$MOUNTDIR"
-# docker run -i --rm \
-#     -v "$MOUNTDIR":/rootfs \
-#     -v "$AGENT_PATH":/usr/local/bin/agent \
-#     -v "$AGENT_INIT_FILE":/etc/init.d/agent \
-#     alpine sh <setup_alpine.sh
-
-# Enable agent service
-chroot "$MOUNTDIR" /bin/systemctl enable agent.service
-sudo chmod +x "$MOUNTDIR/usr/local/bin/agent"
-
-# Link systemd
-sudo chroot "$MOUNTDIR" ln -sf /lib/systemd/systemd /sbin/init
 
 umount $MOUNTDIR
-
 remove_temp_mnt

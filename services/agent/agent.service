@@ -1,5 +1,5 @@
 [Unit]
-Description=Firecracker Agent API Service
+Description=Code Execution Agent API Service
 After=network.target
 StartLimitIntervalSec=0
 

@@ -14,6 +14,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-playground/validator"
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	log "github.com/sirupsen/logrus"
 
 	firecracker "github.com/firecracker-microvm/firecracker-go-sdk"
@@ -21,6 +24,10 @@ import (
 	"github.com/rs/xid"
 	"github.com/yangrchen/collab-coderunner/pkg/types"
 )
+
+type CustomValidator struct {
+	validator *validator.Validate
+}
 
 type CreateRequest struct {
 	RootDrivePath string `json:"root_drive_path"`
@@ -60,29 +67,55 @@ type options struct {
 func main() {
 	defer deleteVMMSockets()
 
-	const numJobs = 1
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	vmpool := make(chan RunningFirecracker, 1)
-	results := make(chan types.AgentRunResponse, numJobs)
+	vmpool := make(chan RunningFirecracker, 10)
 
 	go fillVMPool(ctx, vmpool)
 	installSignalHandlers()
 
-	for i := 0; i < numJobs; i++ {
-		go runJob(ctx, vmpool, results)
-	}
+	e := echo.New()
+	e.Validator = &CustomValidator{validator: validator.New()}
+	e.Use(middleware.CORS())
+	e.GET("/", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"message": "RCE server running..."})
+	})
+	e.POST("/run-job", runJobHandler(vmpool))
+	e.Logger.Fatal(e.Start(":8080"))
+}
 
-	for i := 0; i < numJobs; i++ {
-		res := <-results
-		log.Println(res)
+func (cv *CustomValidator) Validate(i any) error {
+	if err := cv.validator.Struct(i); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	return nil
+}
+
+func runJobHandler(vmpool <-chan RunningFirecracker) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		req := new(types.AgentRunRequest)
+		err := c.Bind(req)
+		if err != nil {
+			return err
+		}
+
+		err = c.Validate(req)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+
+		vm := <-vmpool
+
+		result, err := runJob(c.Request().Context(), vm, req)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(http.StatusOK, result)
 	}
 }
 
-func runJob(ctx context.Context, vmpool <-chan RunningFirecracker, results chan<- types.AgentRunResponse) {
-	vm := <-vmpool
-
+func runJob(ctx context.Context, vm RunningFirecracker, req *types.AgentRunRequest) (types.AgentRunResponse, error) {
 	go func() {
 		defer vm.cancelCtx()
 		vm.machine.Wait(vm.ctx)
@@ -90,25 +123,21 @@ func runJob(ctx context.Context, vmpool <-chan RunningFirecracker, results chan<
 
 	defer vm.machine.Shutdown(ctx)
 
-	req := types.AgentRunRequest{
-		ID:   "1",
-		Code: "a = 3\nb = 6\nprint(f\"{a + b =}\")",
-	}
 	request, err := json.Marshal(&req)
-
 	if err != nil {
-		log.Fatalf("failed to create code request in IP %s", vm.ip.String())
+		return types.AgentRunResponse{}, fmt.Errorf("failed to marshal request: %s", err.Error())
 	}
 
-	var res *http.Response
+	res, err := http.Post("http://"+vm.ip.String()+":1323/run", "application/json", bytes.NewBuffer(request))
+	if err != nil {
+		return types.AgentRunResponse{}, fmt.Errorf("failed to request code execution with error: %s", err.Error())
+	}
+
 	var agentRes types.AgentRunResponse
-	res, err = http.Post("http://"+vm.ip.String()+":1323/run", "application/json", bytes.NewBuffer(request))
-
-	if err != nil {
-		log.Fatalf("failed to request code execution with error: %s", err.Error())
+	if err := json.NewDecoder(res.Body).Decode(&agentRes); err != nil {
+		return types.AgentRunResponse{}, fmt.Errorf("failed to decode response: %s", err.Error())
 	}
-	json.NewDecoder(res.Body).Decode(&agentRes)
-	results <- agentRes
+	return agentRes, nil
 
 }
 

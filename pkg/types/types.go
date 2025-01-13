@@ -8,4 +8,5 @@ type AgentRunRequest struct {
 type AgentRunResponse struct {
 	Stdout string `json:"stdout"`
 	Stderr string `json:"stderr"`
+	Error  string `json:"error"`
 }

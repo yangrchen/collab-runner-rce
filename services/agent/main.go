@@ -45,7 +45,7 @@ func runCode(c echo.Context) error {
 		return err
 	}
 
-	tempFilename := "/tmp/code_run_" + req.ID
+	tempFilename := "/tmp/code_run_" + req.ID + ".py"
 	f, err := os.Create(tempFilename)
 	if err != nil {
 		fmt.Println(err)
@@ -67,7 +67,7 @@ func runCode(c echo.Context) error {
 
 	var execStdout, execStderr bytes.Buffer
 
-	cmd := exec.Command("python3", tempFilename)
+	cmd := exec.Command("state-parser", tempFilename)
 	cmd.Stdout = &execStdout
 	cmd.Stderr = &execStderr
 

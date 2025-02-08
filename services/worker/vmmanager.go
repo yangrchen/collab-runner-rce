@@ -52,6 +52,7 @@ func (v *VMManager) fillVMPool(ctx context.Context, vmpool chan<- RunningVM) {
 				continue
 			}
 
+			// Sends to buffered channel will block when the buffer is full
 			vmpool <- *running
 		}
 	}
@@ -74,7 +75,7 @@ func (v *VMManager) waitForVMHealth(ctx context.Context, ip net.IP) error {
 			defer res.Body.Close()
 
 			if res.StatusCode != http.StatusOK {
-				log.Info("VM not ready yet")
+				log.Errorf("VM not ready with status code %d", res.StatusCode)
 				time.Sleep(v.retryInterval)
 				continue
 			}

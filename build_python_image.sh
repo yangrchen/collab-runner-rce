@@ -21,7 +21,7 @@ CONTAINER_ID=$(docker run -td \
 FS=${1:-python_fs_image}.ext4
 
 mkdir $MOUNTDIR
-qemu-img create -f raw $FS 800M
+qemu-img create -f raw $FS 2048M
 mkfs.ext4 $FS
 
 if ! mount $FS $MOUNTDIR; then

@@ -30,7 +30,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	vmpool := make(chan RunningVM, 10)
+	vmpool := make(chan RunningVM, 5)
 
 	go vmm.fillVMPool(ctx, vmpool)
 

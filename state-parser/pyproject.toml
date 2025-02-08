@@ -1,0 +1,19 @@
+[project]
+name = "state-parser"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "yangrchen", email = "yangrc.chen@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "pure-eval>=0.2.3",
+]
+
+[project.scripts]
+state-parser = "state_parser.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

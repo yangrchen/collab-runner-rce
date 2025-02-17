@@ -1,9 +1,7 @@
 import argparse
 import ast
 import pathlib
-import pickle
-from pure_eval import Evaluator
-
+import dill
 
 class GlobalScopeParser(ast.NodeVisitor):
     def __init__(self):
@@ -15,12 +13,12 @@ class GlobalScopeParser(ast.NodeVisitor):
         if self.context[-1][0] == "global":
             self.global_funcs[node.name] = node
 
-        self.context.append(("function", set()))
+        self.context.append(("function", ()))
         self.generic_visit(node)
         self.context.pop()
 
     def visit_Call(self, node: ast.Call) -> None:
-        self.context.append(("call", set()))
+        self.context.append(("call", ()))
         self.generic_visit(node)
         self.context.pop()
 
@@ -40,6 +38,7 @@ def is_valid_file(parser: argparse.ArgumentParser, arg):
 
 
 def main() -> None:
+
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "-i",
@@ -58,15 +57,11 @@ def main() -> None:
 
     names = {}
     exec(ast.unparse(ast_parsed), names)
-    for nodes, value in Evaluator(names).interesting_expressions_grouped(ast_parsed):
-        target = nodes[0]
 
-        match type(target):
-            case ast.Name:
-                if target.id in visitor.global_vars:
-                    with open(f"var_{target.id}.pickle", "wb") as f:
-                        pickle.dump(names.get(target.id), f)
-            case ast.FunctionDef:
-                if target.name in visitor.global_funcs:
-                    with open(f"func_{target.name}.pickle", "wb") as f:
-                        pickle.dump(names.get(target.name), f)
+    for name, node in visitor.global_vars.items():
+        with open(f"var_{name}.pickle", "wb") as f:
+            dill.dump(names.get(name), f)
+
+    for name, node in visitor.global_funcs.items():
+        with open(f"func_{name}.pickle", "wb") as f:
+            dill.dump(names.get(name), f)

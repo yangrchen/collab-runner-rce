@@ -30,7 +30,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	vmpool := make(chan RunningVM, 5)
+	vmpool := make(chan RunningVM, 1)
 
 	go vmm.fillVMPool(ctx, vmpool)
 
@@ -53,38 +53,12 @@ func (cv *CustomValidator) Validate(i any) error {
 	return nil
 }
 
-func copy(src, dst string) (int64, error) {
-	srcStat, err := os.Stat(src)
-	if err != nil {
-		return 0, err
-	}
-
-	if !srcStat.Mode().IsRegular() {
-		return 0, fmt.Errorf("%s is not a regular file", src)
-	}
-
-	source, err := os.Open(src)
-	if err != nil {
-		return 0, err
-	}
-	defer source.Close()
-
-	destination, err := os.Create(dst)
-	if err != nil {
-		return 0, err
-	}
-	defer destination.Close()
-
-	nBytes, err := io.Copy(destination, source)
-	return nBytes, err
-}
-
 func runJobHandler(vmpool <-chan RunningVM) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		req := new(types.AgentRunRequest)
 		err := c.Bind(req)
 		if err != nil {
-			return err
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
 
 		err = c.Validate(req)
@@ -102,7 +76,7 @@ func runJobHandler(vmpool <-chan RunningVM) echo.HandlerFunc {
 	}
 }
 
-func runJob(vm RunningVM, req *types.AgentRunRequest) (types.AgentRunResponse, error) {
+func runJob(vm RunningVM, req *types.AgentRunRequest) (types.ClientResponse, error) {
 	go func() {
 		defer vm.cancelCtx()
 		vm.machine.Wait(vm.ctx)
@@ -110,21 +84,40 @@ func runJob(vm RunningVM, req *types.AgentRunRequest) (types.AgentRunResponse, e
 
 	defer vm.shutdown()
 
+	// TODO: Implement error handling from response itself
 	request, err := json.Marshal(&req)
 	if err != nil {
-		return types.AgentRunResponse{}, fmt.Errorf("failed to marshal request: %s", err.Error())
+		return types.ClientResponse{}, fmt.Errorf("failed to marshal request: %s", err.Error())
 	}
 
 	res, err := http.Post("http://"+vm.ip.String()+":1323/run", "application/json", bytes.NewBuffer(request))
 	if err != nil {
-		return types.AgentRunResponse{}, fmt.Errorf("failed to request code execution with error: %s", err.Error())
+		return types.ClientResponse{}, fmt.Errorf("failed to request code execution with error: %s", err.Error())
 	}
+	defer res.Body.Close()
 
 	var agentRes types.AgentRunResponse
 	if err := json.NewDecoder(res.Body).Decode(&agentRes); err != nil {
-		return types.AgentRunResponse{}, fmt.Errorf("failed to decode response: %s", err.Error())
+		return types.ClientResponse{}, fmt.Errorf("failed to decode response: %s", err.Error())
 	}
-	return agentRes, nil
+
+	res, err = http.Get(agentRes.StateFileEndpoint)
+	if err != nil {
+		return types.ClientResponse{}, fmt.Errorf("failed to request node state file with error: %s", err.Error())
+	}
+	defer res.Body.Close()
+
+	stateFile, err := os.Create(agentRes.StateFile)
+	if err != nil {
+		return types.ClientResponse{}, fmt.Errorf("failed to create node state file with error: %s", err.Error())
+	}
+	defer stateFile.Close()
+
+	if _, err := io.Copy(stateFile, res.Body); err != nil {
+		return types.ClientResponse{}, fmt.Errorf("failed to save node state file with error: %s", err.Error())
+	}
+
+	return agentRes.ClientRes, nil
 
 }
 

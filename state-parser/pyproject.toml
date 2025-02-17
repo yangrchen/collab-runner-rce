@@ -8,7 +8,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "pure-eval>=0.2.3",
+    "dill>=0.3.9",
 ]
 
 [project.scripts]
@@ -17,3 +17,8 @@ state-parser = "state_parser.main:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=6.29.5",
+]

@@ -1,19 +1,26 @@
 #!/bin/bash
 
-if [ $(id -u) -ne 0 ]; then
+if [[ $(id -u) -ne 0 ]]; then
     echo "Please run this script as root or superuser."
     exit 1
 fi
 
-MOUNTDIR=/tmp/mnt
+MOUNTDIR=/tmp/fcmnt
 remove_temp_mnt() {
     echo "Removing temporary '"$MOUNTDIR"' directory"
     rm -r "$MOUNTDIR"
 }
 
-IMG_ID=$(docker build -q .)
-AGENT_PATH="$(pwd)/services/agent/agent"
+AGENT_PATH="$(pwd)/bin/agent"
 AGENT_INIT_FILE="$(pwd)/services/agent/agent.service"
+
+go build -o "$AGENT_PATH" ./services/agent
+
+if [[ $? -eq 0 ]]; then
+    echo "Agent service successfully built."
+fi
+
+IMG_ID=$(docker build -q .)
 CONTAINER_ID=$(docker run -td \
                 -v "$AGENT_PATH":/usr/local/bin/agent \
                 -v "$AGENT_INIT_FILE":/etc/systemd/system/agent.service $IMG_ID /bin/bash )

@@ -10,6 +10,8 @@ import (
 	models "github.com/firecracker-microvm/firecracker-go-sdk/client/models"
 	"github.com/rs/xid"
 	log "github.com/sirupsen/logrus"
+
+	"github.com/yangrchen/collab-coderunner/pkg/utils"
 )
 
 type RunningVM struct {
@@ -75,7 +77,7 @@ func (opts *options) getConfig() firecracker.Config {
 			MemSizeMib: firecracker.Int64(opts.FcMemSz),
 		},
 		//JailerCfg: jail,
-		//VsockDevices:      vsocks,
+		// VsockDevices:      vsocks,
 		//LogFifo:           opts.FcLogFifo,
 		//LogLevel:          opts.FcLogLevel,
 		//MetricsFifo:       opts.FcMetricsFifo,
@@ -88,7 +90,7 @@ func createVM(ctx context.Context) (*RunningVM, error) {
 	fsImg := "python_fs_image.ext4"
 	rootDrive := fmt.Sprintf("/tmp/%s-%s.ext4", fsImg, vmID)
 
-	copy(fsImg, rootDrive)
+	utils.Copy(fsImg, rootDrive)
 
 	opts := getOptions(vmID, rootDrive)
 	vmCtx, vmCancel := context.WithCancel(ctx)
@@ -102,8 +104,9 @@ func createVM(ctx context.Context) (*RunningVM, error) {
 		WithStderr(os.Stderr).
 		Build(ctx)
 
+	// TODO: Make log level configurable
 	logger := log.New()
-	logger.SetLevel(log.ErrorLevel)
+	logger.SetLevel(log.InfoLevel)
 	logger.SetOutput(os.Stdout)
 
 	machineOpts := []firecracker.Opt{

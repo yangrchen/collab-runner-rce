@@ -1,7 +1,9 @@
 import argparse
 import ast
 import pathlib
+
 import dill
+
 
 class GlobalScopeParser(ast.NodeVisitor):
     def __init__(self):
@@ -38,7 +40,6 @@ def is_valid_file(parser: argparse.ArgumentParser, arg):
 
 
 def main() -> None:
-
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "-i",
@@ -46,6 +47,13 @@ def main() -> None:
         help="input file to be parsed and evaluated",
         required=True,
         type=lambda x: is_valid_file(parser, x),
+    )
+    parser.add_argument("-o", dest="output", help="output filename", required=True)
+    parser.add_argument(
+        "--state-files",
+        dest="state_files",
+        nargs="*",
+        help="node state files to deserialize",
     )
     args = parser.parse_args()
 
@@ -55,13 +63,26 @@ def main() -> None:
     visitor = GlobalScopeParser()
     visitor.visit(ast_parsed)
 
-    names = {}
-    exec(ast.unparse(ast_parsed), names)
+    # Currently keep track of both global namespace and filtered state since
+    # not sure if I want to serialize the entire execution state like __builtins__ yet.
+    # This could change in the future and would deprecate the global parser
+    namespace = {}
+    state = {}
+
+    for pickled_state in args.state_files:
+        with open(pickled_state, "rb") as f:
+            prev_state = dill.load(f)
+        namespace.update(prev_state)
+        state.update(prev_state)
+
+    exec(ast.unparse(ast_parsed), namespace)
 
     for name, node in visitor.global_vars.items():
-        with open(f"var_{name}.pickle", "wb") as f:
-            dill.dump(names.get(name), f)
+        state[name] = namespace.get(name)
 
     for name, node in visitor.global_funcs.items():
-        with open(f"func_{name}.pickle", "wb") as f:
-            dill.dump(names.get(name), f)
+        state[name] = namespace.get(name)
+
+    # Serialize all the global objects together to maintain object refs
+    with open(f"{args.output}.pickle", "wb") as f:
+        dill.dump(state, f, recurse=True)

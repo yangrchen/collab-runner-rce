@@ -1,17 +1,33 @@
 package types
 
 type AgentRunRequest struct {
-	ID   string `json:"id"`
-	Code string `json:"code"`
+	ID        string   `json:"id"`
+	Code      string   `json:"code"`
+	SourceIds []string `json:"sourceIds"`
 }
 
 type AgentRunResponse struct {
-	ClientRes         ClientResponse `json:"client_response"`
-	StateFileEndpoint string         `json:"state_file_endpoint"`
-	StateFile         string         `json:state_file`
+	ClientRes         ClientResponse `json:"clientResponse"`
+	Error             AgentError     `json:"error"`
+	StateFileEndpoint string         `json:"stateFileEndpoint"`
+	StateFile         string         `json:"stateFile"`
+}
+
+type AgentError struct {
+	Message string `json:"message"`
+	Context string `json:"context"`
+}
+
+func (a *AgentError) Error() string {
+	return a.Message
+}
+
+func (a *AgentError) GetContext() string {
+	return a.Context
 }
 
 type ClientResponse struct {
-	Stdout string `json:"stdout"`
-	Stderr string `json:"stderr"`
+	Stdout string   `json:"stdout"`
+	Stderr string   `json:"stderr"`
+	Debug  []string `json:"debug"`
 }

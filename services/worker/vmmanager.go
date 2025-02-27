@@ -17,13 +17,15 @@ type VMManager struct {
 	healthEndpoint string
 	retryInterval  time.Duration
 	bootTimeout    time.Duration
+	logger         *log.Logger
 }
 
-func NewVMManager(healthEndpoint string) *VMManager {
+func NewVMManager(healthEndpoint string, retryInterval, bootTimeout time.Duration, logger *log.Logger) *VMManager {
 	return &VMManager{
 		healthEndpoint: healthEndpoint,
-		retryInterval:  100 * time.Millisecond,
-		bootTimeout:    5 * time.Second,
+		retryInterval:  retryInterval,
+		bootTimeout:    bootTimeout,
+		logger:         logger,
 	}
 }
 
@@ -35,19 +37,19 @@ func (v *VMManager) fillVMPool(ctx context.Context, vmpool chan<- RunningVM) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			running, err := createVM(ctx)
+			running, err := createVM(ctx, v.logger)
 			if err != nil {
-				log.WithError(err).Error("Failed to create VM")
+				v.logger.WithError(err).Error("Failed to create VM")
 				continue
 			}
 
-			log.WithField("ip", running.ip).Info("New VM created and started")
+			v.logger.WithField("ip", running.ip).Info("New VM created and started")
 			bootCtx, cancel := context.WithTimeout(ctx, v.bootTimeout)
 			err = v.waitForVMHealth(bootCtx, running.ip)
 			cancel()
 
 			if err != nil {
-				log.WithError(err).Info("VM boot failed")
+				v.logger.WithError(err).Info("VM boot failed")
 				running.cancelCtx()
 				continue
 			}
@@ -68,19 +70,19 @@ func (v *VMManager) waitForVMHealth(ctx context.Context, ip net.IP) error {
 		default:
 			res, err := http.Get(endpoint)
 			if err != nil {
-				log.WithError(err).Info("VM not ready yet")
+				v.logger.WithError(err).Info("VM not ready yet")
 				time.Sleep(v.retryInterval)
 				continue
 			}
 			defer res.Body.Close()
 
 			if res.StatusCode != http.StatusOK {
-				log.Errorf("VM not ready with status code %d", res.StatusCode)
+				v.logger.Errorf("VM not ready with status code %d", res.StatusCode)
 				time.Sleep(v.retryInterval)
 				continue
 			}
 
-			log.WithField("ip", ip).Info("VM agent ready")
+			v.logger.WithField("ip", ip).Info("VM agent ready")
 			return nil
 		}
 
@@ -90,7 +92,7 @@ func (v *VMManager) waitForVMHealth(ctx context.Context, ip net.IP) error {
 func (v *VMManager) cleanup() {
 	dir, err := os.ReadDir(os.TempDir())
 	if err != nil {
-		log.WithError(err).Error("Failed to read temporary directory")
+		v.logger.WithError(err).Error("Failed to read temporary directory")
 	}
 
 	pattern := "(firecracker-.*.sock|python_fs_image*)"

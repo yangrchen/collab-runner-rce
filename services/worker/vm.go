@@ -85,7 +85,7 @@ func (opts *options) getConfig() firecracker.Config {
 	}
 }
 
-func createVM(ctx context.Context) (*RunningVM, error) {
+func createVM(ctx context.Context, logger *log.Logger) (*RunningVM, error) {
 	vmID := xid.New().String()
 	fsImg := "python_fs_image.ext4"
 	rootDrive := fmt.Sprintf("/tmp/%s-%s.ext4", fsImg, vmID)
@@ -104,14 +104,9 @@ func createVM(ctx context.Context) (*RunningVM, error) {
 		WithStderr(os.Stderr).
 		Build(ctx)
 
-	// TODO: Make log level configurable
-	logger := log.New()
-	logger.SetLevel(log.InfoLevel)
-	logger.SetOutput(os.Stdout)
-
 	machineOpts := []firecracker.Opt{
-		firecracker.WithLogger(log.NewEntry(logger)),
 		firecracker.WithProcessRunner(cmd),
+		firecracker.WithLogger(log.NewEntry(logger)),
 	}
 	machine, err := firecracker.NewMachine(vmCtx, fcCfg, machineOpts...)
 	if err != nil {

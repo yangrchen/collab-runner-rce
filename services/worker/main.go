@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/go-playground/validator"
 	"github.com/labstack/echo/v4"
@@ -19,16 +22,26 @@ import (
 	"github.com/yangrchen/collab-coderunner/pkg/types"
 )
 
+const stateFilePath = "./state_files"
+
 type CustomValidator struct {
 	validator *validator.Validate
 }
 
 func main() {
-	vmm := NewVMManager("1323/")
+	logger := log.New()
+	logger.SetLevel(log.InfoLevel)
+	logger.SetOutput(os.Stdout)
+
+	vmm := NewVMManager("1323/", 100*time.Millisecond, 5*time.Second, logger)
 	defer vmm.cleanup()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	if err := os.MkdirAll(stateFilePath, os.ModePerm); err != nil {
+		logger.Panicf("Failed to create state file path with error: %v", err.Error())
+	}
 
 	vmpool := make(chan RunningVM, 1)
 
@@ -70,8 +83,10 @@ func runJobHandler(vmpool <-chan RunningVM) echo.HandlerFunc {
 
 		result, err := runJob(vm, req)
 		if err != nil {
+			c.Logger().Error(err)
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
+		c.Logger().Info(result)
 		return c.JSON(http.StatusOK, result)
 	}
 }
@@ -84,37 +99,67 @@ func runJob(vm RunningVM, req *types.AgentRunRequest) (types.ClientResponse, err
 
 	defer vm.shutdown()
 
-	// TODO: Implement error handling from response itself
-	request, err := json.Marshal(&req)
-	if err != nil {
-		return types.ClientResponse{}, fmt.Errorf("failed to marshal request: %s", err.Error())
+	body := &bytes.Buffer{}
+
+	mpw := multipart.NewWriter(body)
+	mpw.WriteField("id", req.ID)
+	mpw.WriteField("code", req.Code)
+
+	if len(req.SourceIds) > 0 {
+		for _, sourceId := range req.SourceIds {
+			f, err := os.Open(filepath.Join(stateFilePath, sourceId+"_state.tgz"))
+			if err != nil {
+				return types.ClientResponse{}, err
+			}
+			defer f.Close()
+
+			part, err := mpw.CreateFormFile("stateFiles", filepath.Base(f.Name()))
+			if err != nil {
+				return types.ClientResponse{}, err
+			}
+
+			_, err = io.Copy(part, f)
+			if err != nil {
+				return types.ClientResponse{}, err
+			}
+		}
 	}
 
-	res, err := http.Post("http://"+vm.ip.String()+":1323/run", "application/json", bytes.NewBuffer(request))
+	mpw.Close()
+
+	res, err := http.Post("http://"+vm.ip.String()+":1323/run", mpw.FormDataContentType(), body)
 	if err != nil {
-		return types.ClientResponse{}, fmt.Errorf("failed to request code execution with error: %s", err.Error())
+		return types.ClientResponse{}, err
 	}
 	defer res.Body.Close()
 
 	var agentRes types.AgentRunResponse
 	if err := json.NewDecoder(res.Body).Decode(&agentRes); err != nil {
-		return types.ClientResponse{}, fmt.Errorf("failed to decode response: %s", err.Error())
+		return agentRes.ClientRes, err
+	}
+
+	if res.StatusCode != http.StatusOK {
+		return agentRes.ClientRes, fmt.Errorf("failed to get successful response with error (context: %s): %s", agentRes.Error.GetContext(), agentRes.Error.Error())
 	}
 
 	res, err = http.Get(agentRes.StateFileEndpoint)
 	if err != nil {
-		return types.ClientResponse{}, fmt.Errorf("failed to request node state file with error: %s", err.Error())
+		return agentRes.ClientRes, err
 	}
 	defer res.Body.Close()
 
-	stateFile, err := os.Create(agentRes.StateFile)
+	if res.StatusCode != http.StatusOK {
+		return agentRes.ClientRes, fmt.Errorf("failed to request node state file with error (context: %s): %s", agentRes.Error.GetContext(), agentRes.Error.Error())
+	}
+
+	stateFile, err := os.Create(filepath.Join(stateFilePath, agentRes.StateFile))
 	if err != nil {
-		return types.ClientResponse{}, fmt.Errorf("failed to create node state file with error: %s", err.Error())
+		return types.ClientResponse{}, err
 	}
 	defer stateFile.Close()
 
 	if _, err := io.Copy(stateFile, res.Body); err != nil {
-		return types.ClientResponse{}, fmt.Errorf("failed to save node state file with error: %s", err.Error())
+		return types.ClientResponse{}, err
 	}
 
 	return agentRes.ClientRes, nil

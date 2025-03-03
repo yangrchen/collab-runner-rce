@@ -69,12 +69,12 @@ func runCode(c echo.Context) error {
 	codeDst := filepath.Join("/tmp", "code_run_"+id+".py")
 	f, err := os.OpenFile(codeDst, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, types.AgentRunResponse{Error: types.AgentError{Message: err.Error(), Context: "CODE_RUN"}})
+		return c.JSON(http.StatusInternalServerError, types.AgentRunResponse{Error: types.AgentError{Message: err.Error(), Context: "CODE_CREATE"}})
 	}
 	defer f.Close()
 
 	if len(stateFiles) != 0 {
-		if err := untarFiles("/tmp", utils.Map(stateFiles, func(fileHeader *multipart.FileHeader) string { return filepath.Join(".", fileHeader.Filename) })); err != nil {
+		if err := untarFiles("/tmp", utils.Map(stateFiles, func(fileHeader *multipart.FileHeader) string { return filepath.Join("/tmp", fileHeader.Filename) })); err != nil {
 			return c.JSON(http.StatusInternalServerError, types.AgentRunResponse{Error: types.AgentError{Message: err.Error(), Context: "DESERIALIZE_STATE"}})
 		}
 	}
@@ -83,20 +83,15 @@ func runCode(c echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, err)
 	}
-	// for _, pklObj := range statePklFiles {
-	// 	objName := r.FindStringSubmatch(pklObj)[1]
-	// 	if _, err := f.WriteString(fmt.Sprintf("with open(\"%s\", \"rb\") as f:\n\t%s = dill.load(f)\n", pklObj, objName)); err != nil {
-	// 		return c.JSON(http.StatusInternalServerError, err)
-	// 	}
-	// }
+
 	_, err = f.WriteString(code)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, types.AgentRunResponse{Error: types.AgentError{Message: err.Error(), Context: "CODE_RUN"}})
+		return c.JSON(http.StatusInternalServerError, types.AgentRunResponse{Error: types.AgentError{Message: err.Error(), Context: "CODE_WRITE"}})
 	}
 
 	var execStdout, execStderr bytes.Buffer
 
-	args := []string{"state-parser", "-i", codeDst, "-o", id + "_state"}
+	args := []string{"-i", codeDst, "-o", id + "_state"}
 	if len(statePklFiles) > 0 {
 		args = append(args, "--state-files")
 		args = append(args, statePklFiles...)
@@ -107,7 +102,7 @@ func runCode(c echo.Context) error {
 	cmd.Stderr = &execStderr
 
 	if err := cmd.Run(); err != nil {
-		return c.JSON(http.StatusBadRequest, types.AgentRunResponse{Error: types.AgentError{Message: err.Error(), Context: "CODE_RUN"}})
+		return c.JSON(http.StatusBadRequest, types.AgentRunResponse{Error: types.AgentError{Message: err.Error(), Context: fmt.Sprintf("CODE_RUN: %s", args)}})
 	}
 
 	archiveDst := filepath.Join(".", id+"_state.tgz")

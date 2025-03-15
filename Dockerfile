@@ -8,3 +8,4 @@ ENV UV_PROJECT_ENVIRONMENT=/usr/local
 
 WORKDIR /app
 RUN uv sync --frozen
+RUN uv add polars

@@ -37,6 +37,8 @@ func main() {
 }
 
 func runCode(c echo.Context) error {
+	var clientRes types.ClientResponse
+
 	id := c.FormValue("id")
 	code := c.FormValue("code")
 
@@ -69,24 +71,36 @@ func runCode(c echo.Context) error {
 	codeDst := filepath.Join("/tmp", "code_run_"+id+".py")
 	f, err := os.OpenFile(codeDst, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, types.AgentRunResponse{Error: types.AgentError{Message: err.Error(), Context: "CODE_CREATE"}})
+		return c.JSON(http.StatusInternalServerError, types.AgentRunResponse{
+			ClientRes: clientRes,
+			Error:     types.AgentError{Message: err.Error(), Context: "CODE_CREATE"},
+		})
 	}
 	defer f.Close()
 
 	if len(stateFiles) != 0 {
 		if err := untarFiles("/tmp", utils.Map(stateFiles, func(fileHeader *multipart.FileHeader) string { return filepath.Join("/tmp", fileHeader.Filename) })); err != nil {
-			return c.JSON(http.StatusInternalServerError, types.AgentRunResponse{Error: types.AgentError{Message: err.Error(), Context: "DESERIALIZE_STATE"}})
+			return c.JSON(http.StatusInternalServerError, types.AgentRunResponse{
+				ClientRes: clientRes,
+				Error:     types.AgentError{Message: err.Error(), Context: "DESERIALIZE_STATE"},
+			})
 		}
 	}
 
 	statePklFiles, err := filepath.Glob("/tmp/*_state.pickle")
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, err)
+		return c.JSON(http.StatusInternalServerError, types.AgentRunResponse{
+			ClientRes: clientRes,
+			Error:     types.AgentError{Message: err.Error(), Context: "DESERIALIZE_STATE"},
+		})
 	}
 
 	_, err = f.WriteString(code)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, types.AgentRunResponse{Error: types.AgentError{Message: err.Error(), Context: "CODE_WRITE"}})
+		return c.JSON(http.StatusInternalServerError, types.AgentRunResponse{
+			ClientRes: clientRes,
+			Error:     types.AgentError{Message: err.Error(), Context: "CODE_WRITE"},
+		})
 	}
 
 	var execStdout, execStderr bytes.Buffer
@@ -102,27 +116,32 @@ func runCode(c echo.Context) error {
 	cmd.Stderr = &execStderr
 
 	if err := cmd.Run(); err != nil {
-		return c.JSON(http.StatusBadRequest, types.AgentRunResponse{Error: types.AgentError{Message: err.Error(), Context: fmt.Sprintf("CODE_RUN: %s", args)}})
+		clientRes.Error = execStderr.String()
+		return c.JSON(http.StatusBadRequest, types.AgentRunResponse{
+			ClientRes: clientRes,
+			Error:     types.AgentError{Message: err.Error(), Context: fmt.Sprintf("CODE_RUN: %s", args)}})
 	}
 
 	archiveDst := filepath.Join(".", id+"_state.tgz")
 	pklFiles, err := filepath.Glob("*_state.pickle")
 
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, err)
+		return c.JSON(http.StatusInternalServerError, types.AgentRunResponse{
+			ClientRes: clientRes,
+			Error:     types.AgentError{Message: err.Error(), Context: "SERIALIZE_STATE"},
+		})
 	}
 
 	if len(pklFiles) != 0 {
 		if err := tarFiles(archiveDst, pklFiles); err != nil {
-			return c.JSON(http.StatusInternalServerError, types.AgentRunResponse{Error: types.AgentError{Message: err.Error(), Context: "SERIALIZE_STATE"}})
+			return c.JSON(http.StatusInternalServerError, types.AgentRunResponse{
+				ClientRes: clientRes,
+				Error:     types.AgentError{Message: err.Error(), Context: "SERIALIZE_STATE"},
+			})
 		}
 	}
 
-	clientRes := types.ClientResponse{
-		Stdout: execStdout.String(),
-		Stderr: "",
-	}
-
+	clientRes.Result = execStdout.String()
 	return c.JSON(http.StatusOK, types.AgentRunResponse{
 		ClientRes:         clientRes,
 		StateFileEndpoint: fmt.Sprintf("http://%s/node-state/%s", c.Request().Host, id),

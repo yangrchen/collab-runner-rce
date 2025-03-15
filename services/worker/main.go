@@ -43,7 +43,7 @@ func main() {
 		logger.Panicf("Failed to create state file path with error: %v", err.Error())
 	}
 
-	vmpool := make(chan RunningVM, 1)
+	vmpool := make(chan RunningVM, 5)
 
 	go vmm.fillVMPool(ctx, vmpool)
 
@@ -84,7 +84,7 @@ func runJobHandler(vmpool <-chan RunningVM) echo.HandlerFunc {
 		result, err := runJob(vm, req)
 		if err != nil {
 			c.Logger().Error(err)
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+			return c.JSON(http.StatusInternalServerError, result)
 		}
 		c.Logger().Info(result)
 		return c.JSON(http.StatusOK, result)
@@ -129,7 +129,7 @@ func runJob(vm RunningVM, req *types.AgentRunRequest) (types.ClientResponse, err
 
 	res, err := http.Post("http://"+vm.ip.String()+":1323/run", mpw.FormDataContentType(), body)
 	if err != nil {
-		return types.ClientResponse{}, err
+		return types.ClientResponse{Error: "Error with agent response"}, err
 	}
 	defer res.Body.Close()
 

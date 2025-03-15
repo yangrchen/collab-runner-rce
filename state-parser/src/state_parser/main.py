@@ -1,5 +1,6 @@
 import argparse
 import pathlib
+import sys
 
 import dill
 
@@ -10,7 +11,26 @@ def is_valid_file(parser: argparse.ArgumentParser, arg):
     elif pathlib.Path(arg).suffix != ".py":
         parser.error("Input file should be a Python file")
 
-    return open(arg, "r")
+    return arg
+
+
+def run_file(input_path: str, state_files: list[str], output_name: str):
+    try:
+        namespace = {}
+        for file in state_files:
+            with open(file, "rb") as f:
+                prev_state = dill.load(f)
+                namespace.update(prev_state)
+
+        with open(input_path, "r") as f:
+            exec(f.read(), namespace)
+
+        # Serialize all the global objects together to maintain object refs
+        with open(f"{output_name}.pickle", "wb") as f:
+            dill.dump(namespace, f, recurse=True)
+    except Exception as e:
+        print(f"{type(e).__name__}: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 def main() -> None:
@@ -32,16 +52,6 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    namespace = {}
-
-    for pickled_state in args.state_files:
-        with open(pickled_state, "rb") as f:
-            prev_state = dill.load(f)
-            namespace.update(prev_state)
-
-    exec(args.file.read(), namespace)
-    args.file.close()
-
-    # Serialize all the global objects together to maintain object refs
-    with open(f"{args.output}.pickle", "wb") as f:
-        dill.dump(namespace, f, recurse=True)
+    run_file(
+        input_path=args.file, state_files=args.state_files, output_name=args.output
+    )

@@ -27,7 +27,6 @@ func (a *AgentError) GetContext() string {
 }
 
 type ClientResponse struct {
-	Stdout string   `json:"stdout"`
-	Stderr string   `json:"stderr"`
-	Debug  []string `json:"debug"`
+	Result string `json:"result"`
+	Error  string `json:"error"`
 }
